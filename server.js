@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-// --- ADD THESE ERROR CATCHERS RIGHT HERE ---
+// Error catchers for Railway logs
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err.name, err.message);
   console.error(err.stack);
@@ -11,10 +11,7 @@ process.on('unhandledRejection', (reason) => {
   console.error('UNHANDLED REJECTION:', reason);
   process.exit(1);
 });
-// -------------------------------------------
 
-const express = require('express');
-// ... rest of your code
 const express = require('express');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
@@ -26,7 +23,7 @@ const { cleanupExpiredOTPs } = require('./services/otp');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── Middleware ────────────────────────────────────────────────────────────────
+// Middleware
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -37,11 +34,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// Routes
 app.use('/health', healthRoutes);
 app.use('/webhooks', webhookRoutes);
 
-// Root — basic info
+// Root
 app.get('/', (req, res) => {
   res.json({
     service: 'Insurance Demo — WhatsApp Chatbot',
@@ -54,7 +51,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Manual trigger endpoints (for testing without cron)
+// Manual trigger endpoints
 app.post('/admin/trigger-premium-alerts', async (req, res) => {
   const { sendPremiumDueAlerts } = require('./services/alerts');
   const count = await sendPremiumDueAlerts();
@@ -75,7 +72,7 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-// ─── Start server ─────────────────────────────────────────────────────────────
+// Start server
 async function start() {
   const uri = process.env.MONGO_URI;
   if (!uri) {
