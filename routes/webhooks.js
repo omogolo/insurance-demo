@@ -5,7 +5,7 @@ const Policy = require('../models/Policy');
 const Statement = require('../models/Statement');
 const { cacheFromWebhook } = require('../services/conversation');
 const { createOTP, validateOTP } = require('../services/otp');
-const { sendTextMessage } = require('./services/whatsapp'); // Keep for normal chat
+const { sendTextMessage } = require('../services/whatsapp'); // Keep for normal chat
 const { sendOTPSMS } = require('./services/sms'); // NEW: TextBW Integration
 const { policySummaryLine, buildStatementMessage, formatCurrency, formatDate } = require('../utils/helpers');
 
