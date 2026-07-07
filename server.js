@@ -1,4 +1,21 @@
 require('dotenv').config();
+require('dotenv').config();
+
+// --- ADD THESE ERROR CATCHERS RIGHT HERE ---
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err.name, err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason);
+  process.exit(1);
+});
+// -------------------------------------------
+
+const express = require('express');
+// ... rest of your code
 const express = require('express');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
