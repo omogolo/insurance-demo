@@ -87,7 +87,7 @@ async function start() {
     // Initialize cron jobs
     initCronJobs();
 
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`[Server] Running on port ${PORT}`);
       console.log(`[Server] Health check: http://localhost:${PORT}/health`);
       console.log(`[Server] Webhook: http://localhost:${PORT}/webhooks/respondio`);
