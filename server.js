@@ -1,12 +1,10 @@
 require('dotenv').config();
 
-// Error catchers for Railway logs
+// Crash handlers for clean Railway logs
 process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION:', err.name, err.message);
-  console.error(err.stack);
+  console.error('UNCAUGHT EXCEPTION:', err.message);
   process.exit(1);
 });
-
 process.on('unhandledRejection', (reason) => {
   console.error('UNHANDLED REJECTION:', reason);
   process.exit(1);
@@ -14,101 +12,51 @@ process.on('unhandledRejection', (reason) => {
 
 const express = require('express');
 const mongoose = require('mongoose');
-const cron = require('node-cron');
 const healthRoutes = require('./routes/health');
 const webhookRoutes = require('./routes/webhooks');
-const { initCronJobs, sendClaimUpdateAlert } = require('./services/alerts');
-const { cleanupExpiredOTPs } = require('./services/otp');
+const { initCronJobs } = require('./services/alerts');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// Routes
 app.use('/health', healthRoutes);
 app.use('/webhooks', webhookRoutes);
 
-// Root
 app.get('/', (req, res) => {
-  res.json({
-    service: 'Insurance Demo — WhatsApp Chatbot',
-    version: '1.0.0',
-    endpoints: {
-      health: '/health',
-      webhook: '/webhooks/respondio (POST)'
-    },
-    timestamp: new Date().toISOString()
-  });
+  res.json({ service: 'Insurance Demo v2.0 — BWP', status: 'alive' });
 });
 
-// Manual trigger endpoints
-app.post('/admin/trigger-premium-alerts', async (req, res) => {
-  const { sendPremiumDueAlerts } = require('./services/alerts');
-  const count = await sendPremiumDueAlerts();
-  res.json({ triggered: true, alertsSent: count });
-});
+// Admin routes removed for clean demo, add back if needed
 
-app.post('/admin/trigger-claim-alert', async (req, res) => {
-  const { customerId, claimId, policyId, status, details } = req.body;
-  if (!customerId || !claimId || !policyId || !status) {
-    return res.status(400).json({ error: 'Missing required fields: customerId, claimId, policyId, status' });
-  }
-  const result = await sendClaimUpdateAlert(customerId, claimId, policyId, status, details);
-  res.json({ triggered: true, result });
-});
-
-// 404
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-// Start server
 async function start() {
-  const uri = process.env.MONGO_URI;
-  if (!uri) {
-    console.error('FATAL: MONGO_URI not set in .env');
+  if (!process.env.MONGO_URI) {
+    console.error('FATAL: MONGO_URI not set');
     process.exit(1);
   }
-
   try {
-    await mongoose.connect(uri);
-    console.log(`[DB] Connected to MongoDB (${mongoose.connection.host})`);
-
-    // Initialize cron jobs
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log(`[DB] Connected to MongoDB`);
     initCronJobs();
-
+    
+    // THE RAILWAY FIX: Must bind to '0.0.0.0'
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`[Server] Running on port ${PORT}`);
-      console.log(`[Server] Health check: http://localhost:${PORT}/health`);
-      console.log(`[Server] Webhook: http://localhost:${PORT}/webhooks/respondio`);
     });
   } catch (err) {
-    console.error('FATAL: Failed to start:', err.message);
+    console.error('FATAL: DB Connection failed:', err.message);
     process.exit(1);
   }
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('[Server] SIGTERM received, shutting down...');
-  await mongoose.disconnect();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('\n[Server] SIGINT received, shutting down...');
-  await mongoose.disconnect();
-  process.exit(0);
-});
+process.on('SIGTERM', async () => { await mongoose.disconnect(); process.exit(0); });
+process.on('SIGINT', async () => { await mongoose.disconnect(); process.exit(0); });
 
 start();
