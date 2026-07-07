@@ -21,7 +21,7 @@ async function sendPremiumDueAlerts() {
       $lte: sevenDaysFromNow,
       $gte: new Date()
     }
-  }).populate('customerId');
+  });
 
   if (duePolicies.length === 0) {
     console.log('[Alerts] No premiums due in next 7 days');
@@ -33,7 +33,7 @@ async function sendPremiumDueAlerts() {
   // Group by customer to avoid duplicate lookups
   const customerMap = new Map();
   for (const policy of duePolicies) {
-    const custId = typeof policy.customerId === 'object' ? policy.customerId.customerId : policy.customerId;
+    const custId = policy.customerId;
     if (!customerMap.has(custId)) {
       const customer = await Customer.findOne({ customerId: custId });
       customerMap.set(custId, customer);
@@ -42,16 +42,12 @@ async function sendPremiumDueAlerts() {
 
   let sent = 0;
   for (const policy of duePolicies) {
-    const custId = typeof policy.customerId === 'object' ? policy.customerId.customerId : policy.customerId;
-    const customer = customerMap.get(custId);
+    const customer = customerMap.get(policy.customerId);
     if (!customer) continue;
 
-    // In production, you'd look up the conversation ID from Respond.io
-    // For now, we log and use a placeholder
-    const conversationId = `conv_${custId}`; // Replace with actual lookup
-
+    // Pass phone number directly to whatsapp service
     const result = await sendTemplateMessage(
-      conversationId,
+      customer.phone,
       'premium_due_alert',
       [
         customer.name,
@@ -71,11 +67,6 @@ async function sendPremiumDueAlerts() {
 
 /**
  * Manually trigger a claim update alert for a specific claim.
- * @param {string} customerId
- * @param {string} claimId
- * @param {string} policyId
- * @param {string} newStatus
- * @param {string} details
  */
 async function sendClaimUpdateAlert(customerId, claimId, policyId, newStatus, details = '') {
   const customer = await Customer.findOne({ customerId });
@@ -84,10 +75,8 @@ async function sendClaimUpdateAlert(customerId, claimId, policyId, newStatus, de
     return false;
   }
 
-  const conversationId = `conv_${customerId}`; // Replace with actual lookup
-
   const result = await sendTemplateMessage(
-    conversationId,
+    customer.phone,
     'claim_update_alert',
     [
       customer.name,
@@ -104,28 +93,28 @@ async function sendClaimUpdateAlert(customerId, claimId, policyId, newStatus, de
 
 /**
  * Initialize cron jobs.
- * Call this once from server.js after DB connection.
+ * Timezone set to Africa/Gaborone for Botswana localization.
  */
 function initCronJobs() {
-  // Daily at 08:00 — check for due premiums
+  // Daily at 08:00 CAT — check for due premiums
   cron.schedule('0 8 * * *', () => {
     console.log('[Cron] 08:00 — Premium due check');
     sendPremiumDueAlerts().catch(err => {
       console.error('[Cron] Premium due alert error:', err.message);
     });
   }, {
-    timezone: 'Asia/Kolkata'
+    timezone: 'Africa/Gaborone'
   });
 
-  // Daily at 03:00 — cleanup expired OTPs
+  // Daily at 03:00 CAT — cleanup expired OTPs
   cron.schedule('0 3 * * *', async () => {
     const { cleanupExpiredOTPs } = require('./otp');
     await cleanupExpiredOTPs();
   }, {
-    timezone: 'Asia/Kolkata'
+    timezone: 'Africa/Gaborone'
   });
 
-  console.log('[Cron] Jobs initialized (premium due at 08:00, OTP cleanup at 03:00 IST)');
+  console.log('[Cron] Jobs initialized (Premium due at 08:00, OTP cleanup at 03:00 CAT)');
 }
 
 module.exports = {
