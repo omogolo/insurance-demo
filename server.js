@@ -1,5 +1,4 @@
 require('dotenv').config();
-require('dotenv').config();
 
 // --- ADD THESE ERROR CATCHERS RIGHT HERE ---
 process.on('uncaughtException', (err) => {
