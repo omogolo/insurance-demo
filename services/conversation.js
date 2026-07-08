@@ -64,8 +64,8 @@ async function getConversationId(phone) {
         'Content-Type': 'application/json'
       },
       params: {
-        contactId: cached.contactId,
-        channelId: cached.channelId
+        contactId: String(cached.contactId),
+        channelId: String(cached.channelId)
       },
       timeout: 10000
     });
