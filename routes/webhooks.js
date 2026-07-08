@@ -30,12 +30,36 @@ function isInboundCustomerMessage(payload) {
   return payload.message?.traffic === 'incoming' && payload.sender?.source === 'user';
 }
 
+// ─── Main webhook handler ─────────────────────────────────────────────────────
+
 router.post('/respondio', async (req, res) => {
-  console.log('=== RAW WEBHOOK PAYLOAD RECEIVED ===', JSON.stringify(payload, null, 2));
+  // 1. Extract payload FIRST
   const payload = req.body.data || req.body;
+
+  // 2. Debug log SECOND (so payload is defined)
+  console.log('=== RAW PAYLOAD ===', JSON.stringify(payload, null, 2));
+
+  // 3. Cache contact info
   cacheFromWebhook(payload);
+
+  // 4. Acknowledge immediately
   res.status(200).json({ received: true });
 
+  // 5. Filter: only process inbound customer messages
+  if (!isInboundCustomerMessage(payload)) {
+    console.log(`[Webhook] Ignoring — traffic: ${payload.message?.traffic}, sender: ${payload.sender?.source}`);
+    return;
+  }
+
+  const phone = extractPhone(payload);
+  const rawText = extractMessageText(payload).trim().toLowerCase();
+
+  console.log(`[Webhook] INBOUND | Phone: ${phone} | Text: "${rawText}"`);
+
+  if (!phone) {
+    console.warn('[Webhook] No phone in payload, skipping');
+    return;
+  }
   if (!isInboundCustomerMessage(payload)) return;
 
   const phone = extractPhone(payload);
