@@ -26,35 +26,31 @@ setInterval(() => {
 function extractPhone(payload) {
   let phone = payload.contact?.phone || null;
   if (phone) {
-    // Remove any spaces
     phone = phone.replace(/\s+/g, '');
-    // If it's missing the '+', add it so it matches the DB format
-    if (!phone.startsWith('+')) {
-      phone = '+' + phone;
-    }
+    if (!phone.startsWith('+')) phone = '+' + phone;
   }
   return phone;
 }
 
 function extractMessageText(payload) {
   try {
+    // Handle Manual Workflow format
     if (payload.message?.message?.type === 'text' && payload.message.message.text) {
       return payload.message.message.text;
     }
-    if (payload.message?.payload?.type === 'text' && payload.message.payload.text) {
-      return payload.message.payload.text;
+    // Handle Raw Global Webhook format (text is inside channel.message!)
+    if (payload.channel?.message?.type === 'text' && payload.channel.message.text) {
+      return payload.channel.message.text;
     }
     return '';
   } catch { return ''; }
 }
 
 function isInboundCustomerMessage(payload) {
-  if (payload.message?.traffic === 'incoming' && payload.sender?.source === 'user') {
-    return true;
-  }
-  if (payload.event_type === 'message.created' && payload.contact?.id) {
-    return true;
-  }
+  // Handle Manual Workflow format
+  if (payload.message?.traffic === 'incoming' && payload.sender?.source === 'user') return true;
+  // Handle Raw Global Webhook format
+  if ((payload.event_type === 'message.received' || payload.event_type === 'message.created') && payload.sender?.source === 'contact') return true;
   return false;
 }
 
