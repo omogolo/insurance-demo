@@ -1,11 +1,7 @@
-const axios = require('axios');
 require('dotenv').config();
 
-const RESPONDIO_API_TOKEN = process.env.RESPONDIO_API_TOKEN;
-const RESPONDIO_BASE = 'https://api.respond.io/v2';
-
 /**
- * In-memory cache: phone → { contactId, channelId, conversationId, expiresAt }
+ * In-memory cache: phone -> { contactId, channelId, conversationId, expiresAt }
  * TTL = 24 hours per entry.
  */
 const cache = new Map();
@@ -13,25 +9,28 @@ const cache = new Map();
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
- * Extract contactId and channelId from an incoming webhook payload
+ * Extract contactId, channelId, and conversationId from an incoming webhook payload
  * and store them in the cache keyed by phone number.
  */
-
 function cacheFromWebhook(payload) {
   const phone = payload.contact?.phone;
   const contactId = payload.contact?.id;
-  // Ignore $variable strings from broken workflow mapping, fallback to env variable
+  
+  // Handle channel ID mapping (fallback to env if Workflow fails to map $channel.id)
   let channelId = payload.channel?.id || payload.message?.channelId;
   if (typeof channelId === 'string' && channelId.startsWith('$')) {
     channelId = process.env.RESPONDIO_WHATSAPP_CHANNEL_ID;
   }
+
+  // GRAB THE CONVERSATION ID DIRECTLY FROM THE WORKFLOW PAYLOAD
+  const conversationId = payload.conversationId || null;
 
   if (phone && contactId && channelId) {
     const existing = cache.get(phone);
     cache.set(phone, {
       contactId,
       channelId,
-      conversationId: existing?.conversationId || null,
+      conversationId: conversationId || existing?.conversationId || null,
       expiresAt: Date.now() + CACHE_TTL_MS
     });
   }
@@ -39,11 +38,12 @@ function cacheFromWebhook(payload) {
 
 /**
  * Resolve a phone number to a Respond.io conversation ID.
- * 1. Check cache
- * 2. Call Respond.io API: GET /contacts/{contactId}/conversations?channelId={channelId}
- * 3. Cache the result
- *
- * @param {string} phone — e.g. "+919876543210"
+ * 
+ * V2.0 Architecture: We no longer make an API call to Respond.io to look up the 
+ * conversation ID. The Respond.io Workflow now passes the conversationId 
+ * directly in the webhook payload, which we cache and use here.
+ * 
+ * @param {string} phone — e.g. "+26771234567"
  * @returns {string|null} — conversation ID or null if not found
  */
 async function getConversationId(phone) {
@@ -54,55 +54,15 @@ async function getConversationId(phone) {
   }
 
   const cached = cache.get(phone);
+  
+  // Return the conversation ID if the Workflow successfully passed it to us
   if (cached?.conversationId) {
     return cached.conversationId;
   }
 
-  if (!cached?.contactId || !cached?.channelId) {
-    console.warn(`[ConvCache] No contactId/channelId cached for ${phone}`);
-    return null;
-  }
-
-  if (!RESPONDIO_API_TOKEN) {
-    console.warn('[ConvCache] RESPONDIO_API_TOKEN not set, cannot resolve conversation');
-    return null;
-  }
-
-  try {
-    console.log(`[ConvCache] API Call -> contactId: ${cached.contactId}, channelId: ${cached.channelId}, Token: ${RESPONDIO_API_TOKEN ? 'SET' : 'MISSING'}`);
-        const response = await axios.get(
-      `${RESPONDIO_BASE}/contacts/${cached.contactId}/conversations`,
-      {
-        headers: {
-          'Authorization': `Bearer ${RESPONDIO_API_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        params: {
-          channelId: cached.channelId
-        },
-        timeout: 10000
-      }
-    );
-
-    const conversations = response.data?.data || [];
-    const conv = conversations[0];
-
-    if (conv?.id) {
-      cache.set(phone, {
-        ...cached,
-        conversationId: String(conv.id),
-        expiresAt: Date.now() + CACHE_TTL_MS
-      });
-      console.log(`[ConvCache] Resolved conversation ${conv.id} for ${phone}`);
-      return String(conv.id);
-    }
-
-    console.warn(`[ConvCache] No conversation found for contact ${cached.contactId} on channel ${cached.channelId}`);
-    return null;
-  } catch (err) {
-    console.error(`[ConvCache] API lookup failed for ${phone}:`, err.response?.data || err.message);
-    return null;
-  }
+  // If we don't have it, we can't proceed with sending the message
+  console.warn(`[ConvCache] No conversation ID found for ${phone}. Ensure the Workflow JSON includes "conversationId": "$conversation.id"`);
+  return null;
 }
 
 /**
