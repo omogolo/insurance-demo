@@ -5,10 +5,11 @@ const Policy = require('../models/Policy');
 const Statement = require('../models/Statement');
 const { cacheFromWebhook } = require('../services/conversation');
 const { createOTP, validateOTP } = require('../services/otp');
-const { sendTextMessage } = require('../services/whatsapp'); // Keep for normal chat
-const { sendOTPSMS } = require('../services/sms'); // NEW: TextBW Integration
-const { policySummaryLine, buildStatementMessage, formatCurrency, formatDate } = require('../utils/helpers');
+const { sendTextMessage } = require('../services/whatsapp');
+const { sendOTPSMS } = require('../services/sms');
+const { policySummaryLine, buildStatementMessage, formatCurrency } = require('../utils/helpers');
 
+// ─── In-memory session state ──────────────────────────────────────────────────
 const sessions = new Map();
 function getSession(phone) { return sessions.get(phone); }
 function setSession(phone, state, data = {}, ttlMinutes = 10) {
@@ -21,31 +22,42 @@ setInterval(() => {
   for (const [phone, session] of sessions) { if (session.expiresAt < now) sessions.delete(phone); }
 }, 5 * 60 * 1000);
 
-function extractPhone(payload) { return payload.contact?.phone || null; }
-function extractMessageText(payload) {
-  try { return payload.message?.message?.type === 'text' ? payload.message.message.text : ''; } 
-  catch { return ''; }
+// ─── Extraction functions ─────────────────────────────────────────────────────
+function extractPhone(payload) {
+  return payload.contact?.phone || null;
 }
+
+function extractMessageText(payload) {
+  try {
+    if (payload.message?.message?.type === 'text' && payload.message.message.text) {
+      return payload.message.message.text;
+    }
+    if (payload.message?.payload?.type === 'text' && payload.message.payload.text) {
+      return payload.message.payload.text;
+    }
+    return '';
+  } catch { return ''; }
+}
+
 function isInboundCustomerMessage(payload) {
-  return payload.message?.traffic === 'incoming' && payload.sender?.source === 'user';
+  if (payload.message?.traffic === 'incoming' && payload.sender?.source === 'user') {
+    return true;
+  }
+  if (payload.event_type === 'message.created' && payload.contact?.id) {
+    return true;
+  }
+  return false;
 }
 
 // ─── Main webhook handler ─────────────────────────────────────────────────────
-
 router.post('/respondio', async (req, res) => {
-  // 1. Extract payload FIRST
   const payload = req.body.data || req.body;
-
-  // 2. Debug log SECOND (so payload is defined)
+  
   console.log('=== RAW PAYLOAD ===', JSON.stringify(payload, null, 2));
 
-  // 3. Cache contact info
   cacheFromWebhook(payload);
-
-  // 4. Acknowledge immediately
   res.status(200).json({ received: true });
 
-  // 5. Filter: only process inbound customer messages
   if (!isInboundCustomerMessage(payload)) {
     console.log(`[Webhook] Ignoring — traffic: ${payload.message?.traffic}, sender: ${payload.sender?.source}`);
     return;
@@ -60,14 +72,9 @@ router.post('/respondio', async (req, res) => {
     console.warn('[Webhook] No phone in payload, skipping');
     return;
   }
-  if (!isInboundCustomerMessage(payload)) return;
-
-  const phone = extractPhone(payload);
-  const rawText = extractMessageText(payload).trim().toLowerCase();
-  if (!phone) return;
 
   const customer = await Customer.findOne({ phone });
-    if (!customer) {
+  if (!customer) {
     await sendTextMessage(phone, `Unfortunately your mobile number is not on the system. Please contact support for this issue.`);
     return;
   }
@@ -150,17 +157,13 @@ router.post('/respondio', async (req, res) => {
 async function triggerOTPFlow(phone, customer, policyId, purpose) {
   const otp = await createOTP(customer.customerId, purpose);
   
-  // 1. Send OTP via TextBW
   const smsResult = await sendOTPSMS(customer.phone, otp);
 
-  // 2. Evaluate SMS Result
   if (!smsResult.success) {
-    // If SMS failed, DO NOT put them in AWAITING_OTP state. Let them try again.
     await sendTextMessage(phone, `❌ *OTP Failed*\n\n${smsResult.message}\n\nReply *help* to return to the menu.`);
     return;
   }
 
-  // 3. SMS Success -> Set state and send WhatsApp warning
   setSession(customer.phone, 'AWAITING_OTP', { purpose, policyId }, 10);
   
   await sendTextMessage(phone, 
