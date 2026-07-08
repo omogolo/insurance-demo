@@ -1,28 +1,22 @@
 require('dotenv').config();
+const axios = require('axios');
 
-/**
- * In-memory cache: phone -> { contactId, channelId, conversationId, expiresAt }
- * TTL = 24 hours per entry.
- */
+const RESPONDIO_API_TOKEN = process.env.RESPONDIO_API_TOKEN;
+const RESPONDIO_BASE = 'https://api.respond.io/v2';
+
 const cache = new Map();
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-/**
- * Extract contactId, channelId, and conversationId from an incoming webhook payload
- * and store them in the cache keyed by phone number.
- */
 function cacheFromWebhook(payload) {
   const phone = payload.contact?.phone;
   const contactId = payload.contact?.id;
   
-  // Handle channel ID mapping (fallback to env if Workflow fails to map $channel.id)
   let channelId = payload.channel?.id || payload.message?.channelId;
   if (typeof channelId === 'string' && channelId.startsWith('$')) {
     channelId = process.env.RESPONDIO_WHATSAPP_CHANNEL_ID;
   }
 
-  // GRAB THE CONVERSATION ID DIRECTLY FROM THE WORKFLOW PAYLOAD
+  // Global Webhook doesn't pass conversationId, so we set it to null here
   const conversationId = payload.conversationId || null;
 
   if (phone && contactId && channelId) {
@@ -36,18 +30,7 @@ function cacheFromWebhook(payload) {
   }
 }
 
-/**
- * Resolve a phone number to a Respond.io conversation ID.
- * 
- * V2.0 Architecture: We no longer make an API call to Respond.io to look up the 
- * conversation ID. The Respond.io Workflow now passes the conversationId 
- * directly in the webhook payload, which we cache and use here.
- * 
- * @param {string} phone — e.g. "+26771234567"
- * @returns {string|null} — conversation ID or null if not found
- */
 async function getConversationId(phone) {
-  // Clean expired entries
   const now = Date.now();
   for (const [key, val] of cache) {
     if (val.expiresAt < now) cache.delete(key);
@@ -55,19 +38,62 @@ async function getConversationId(phone) {
 
   const cached = cache.get(phone);
   
-  // Return the conversation ID if the Workflow successfully passed it to us
+  // If we already have it cached, return it immediately
   if (cached?.conversationId) {
     return cached.conversationId;
   }
 
-  // If we don't have it, we can't proceed with sending the message
-  console.warn(`[ConvCache] No conversation ID found for ${phone}. Ensure the Workflow JSON includes "conversationId": "$conversation.id"`);
-  return null;
+  if (!cached?.contactId || !cached?.channelId) {
+    console.warn(`[ConvCache] Missing contactId or channelId for ${phone}`);
+    return null;
+  }
+
+  if (!RESPONDIO_API_TOKEN) {
+    console.warn('[ConvCache] RESPONDIO_API_TOKEN not set');
+    return null;
+  }
+
+  try {
+    // CORRECTED Respond.io v2 API Endpoint for fetching conversations
+    const url = `${RESPONDIO_BASE}/conversations`;
+    console.log(`[ConvCache] Fetching via API -> contactId: ${cached.contactId}, channelId: ${cached.channelId}`);
+    
+    const response = await axios.get(url, {
+      headers: {
+        'Authorization': `Bearer ${RESPONDIO_API_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      params: {
+        contactId: cached.contactId,
+        channelId: cached.channelId
+      },
+      timeout: 10000
+    });
+
+    const conversations = response.data?.data || [];
+    const conv = conversations[0];
+
+    if (conv?.id) {
+      cache.set(phone, {
+        ...cached,
+        conversationId: String(conv.id),
+        expiresAt: Date.now() + CACHE_TTL_MS
+      });
+      console.log(`[ConvCache] SUCCESS! Resolved conversation ${conv.id} for ${phone}`);
+      return String(conv.id);
+    }
+
+    // If we get here, the API worked but returned 0 conversations
+    console.warn(`[ConvCache] API returned 0 conversations. Full response:`, JSON.stringify(response.data));
+    return null;
+
+  } catch (err) {
+    // If we get here, the API rejected the request (404, 401, etc.)
+    console.error(`[ConvCache] API FAILED for ${phone}. Status: ${err.response?.status}, Error:`, JSON.stringify(err.response?.data));
+    return null;
+  }
 }
 
-/**
- * Debug helper: dump cache contents
- */
 function getCacheStats() {
   return {
     size: cache.size,
