@@ -16,10 +16,15 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
  * Extract contactId and channelId from an incoming webhook payload
  * and store them in the cache keyed by phone number.
  */
+
 function cacheFromWebhook(payload) {
   const phone = payload.contact?.phone;
   const contactId = payload.contact?.id;
-  const channelId = payload.channel?.id || payload.message?.channelId;
+  // Ignore $variable strings from broken workflow mapping, fallback to env variable
+  let channelId = payload.channel?.id || payload.message?.channelId;
+  if (typeof channelId === 'string' && channelId.startsWith('$')) {
+    channelId = process.env.RESPONDIO_WHATSAPP_CHANNEL_ID;
+  }
 
   if (phone && contactId && channelId) {
     const existing = cache.get(phone);
