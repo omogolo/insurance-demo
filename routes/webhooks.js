@@ -42,8 +42,8 @@ router.post('/respondio', async (req, res) => {
   if (!phone) return;
 
   const customer = await Customer.findOne({ phone });
-  if (!customer) {
-    await sendTextMessage(phone, `❌ No account found for this number.\nReply *help* for options.`);
+    if (!customer) {
+    await sendTextMessage(phone, `Unfortunately your mobile number is not on the system. Please contact support for this issue.`);
     return;
   }
 
