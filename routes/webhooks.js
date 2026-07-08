@@ -24,7 +24,16 @@ setInterval(() => {
 
 // ─── Extraction functions ─────────────────────────────────────────────────────
 function extractPhone(payload) {
-  return payload.contact?.phone || null;
+  let phone = payload.contact?.phone || null;
+  if (phone) {
+    // Remove any spaces
+    phone = phone.replace(/\s+/g, '');
+    // If it's missing the '+', add it so it matches the DB format
+    if (!phone.startsWith('+')) {
+      phone = '+' + phone;
+    }
+  }
+  return phone;
 }
 
 function extractMessageText(payload) {
