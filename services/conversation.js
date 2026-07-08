@@ -64,7 +64,8 @@ async function getConversationId(phone) {
   }
 
   try {
-    const response = await axios.get(
+    console.log(`[ConvCache] API Call -> contactId: ${cached.contactId}, channelId: ${cached.channelId}, Token: ${RESPONDIO_API_TOKEN ? 'SET' : 'MISSING'}`);
+        const response = await axios.get(
       `${RESPONDIO_BASE}/contacts/${cached.contactId}/conversations`,
       {
         headers: {
