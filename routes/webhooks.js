@@ -31,6 +31,7 @@ function isInboundCustomerMessage(payload) {
 }
 
 router.post('/respondio', async (req, res) => {
+  console.log('=== RAW WEBHOOK PAYLOAD RECEIVED ===', JSON.stringify(payload, null, 2));
   const payload = req.body.data || req.body;
   cacheFromWebhook(payload);
   res.status(200).json({ received: true });
