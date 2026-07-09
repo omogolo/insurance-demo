@@ -1,124 +1,113 @@
 const Policy = require('../models/Policy');
 const Customer = require('../models/Customer');
-const { sendTemplateMessage } = require('./whatsapp');
 const { formatCurrency, formatDate } = require('../utils/helpers');
 const cron = require('node-cron');
 
+const TIMEZONE = 'Africa/Gaborone';
+
 /**
- * Check for policies with premiums due within the next 7 days
- * and send alert templates via WhatsApp.
- * Designed to run daily at 08:00.
+ * Check for policies with premiums due within 7 days.
+ * In v2.0, this logs alerts but does NOT send WhatsApp messages directly.
+ * In a production system, this would trigger the Respond.io workflow
+ * or use the Response Mapping pattern.
  */
 async function sendPremiumDueAlerts() {
-  console.log('[Alerts] Checking for due premiums...');
+  console.log(`[Cron] ${new Date().toISOString()} — Premium due check`);
 
   const sevenDaysFromNow = new Date();
   sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
 
   const duePolicies = await Policy.find({
     status: 'Active',
-    nextPremiumDue: {
+    'premium.nextDue': {
       $lte: sevenDaysFromNow,
       $gte: new Date()
     }
   });
 
   if (duePolicies.length === 0) {
-    console.log('[Alerts] No premiums due in next 7 days');
+    console.log('[Cron] No premiums due in next 7 days');
     return 0;
   }
 
-  console.log(`[Alerts] Found ${duePolicies.length} policies with due premiums`);
+  console.log(`[Cron] Found ${duePolicies.length} policies with due premiums`);
 
-  // Group by customer to avoid duplicate lookups
-  const customerMap = new Map();
+  // Group by customerId to avoid duplicate customer lookups
+  const customerCache = new Map();
   for (const policy of duePolicies) {
-    const custId = policy.customerId;
-    if (!customerMap.has(custId)) {
-      const customer = await Customer.findOne({ customerId: custId });
-      customerMap.set(custId, customer);
+    if (!customerCache.has(policy.customerId)) {
+      customerCache.set(policy.customerId, await Customer.findOne({ customerId: policy.customerId }));
+    }
+    const customer = customerCache.get(policy.customerId);
+    if (customer) {
+      console.log(
+        `[Cron] ALERT: ${customer.name} — ${policy.policyId} (${policy.type}) ` +
+        `premium P${policy.premium.amount} due ${formatDate(policy.premium.nextDue)}`
+      );
+      // In production: send via Respond.io API or trigger workflow here
     }
   }
 
-  let sent = 0;
-  for (const policy of duePolicies) {
-    const customer = customerMap.get(policy.customerId);
-    if (!customer) continue;
-
-    // Pass phone number directly to whatsapp service
-    const result = await sendTemplateMessage(
-      customer.phone,
-      'premium_due_alert',
-      [
-        customer.name,
-        policy.type,
-        policy.policyId,
-        formatCurrency(policy.premium.amount),
-        formatDate(policy.nextPremiumDue)
-      ]
-    );
-
-    if (result.success || result.skipped) sent++;
-  }
-
-  console.log(`[Alerts] Sent ${sent} premium due alerts`);
-  return sent;
+  return duePolicies.length;
 }
 
 /**
- * Manually trigger a claim update alert for a specific claim.
+ * Initialize all cron jobs.
+ * Safe to call multiple times.
  */
-async function sendClaimUpdateAlert(customerId, claimId, policyId, newStatus, details = '') {
-  const customer = await Customer.findOne({ customerId });
-  if (!customer) {
-    console.error(`[Alerts] Customer ${customerId} not found`);
-    return false;
-  }
+let cronInitialized = false;
 
-  const result = await sendTemplateMessage(
-    customer.phone,
-    'claim_update_alert',
-    [
-      customer.name,
-      claimId,
-      policyId,
-      newStatus,
-      details || 'Please contact support for more information.'
-    ]
-  );
-
-  console.log(`[Alerts] Claim update alert sent for ${claimId}: ${newStatus}`);
-  return result.success || result.skipped;
-}
-
-/**
- * Initialize cron jobs.
- * Timezone set to Africa/Gaborone for Botswana localization.
- */
 function initCronJobs() {
-  // Daily at 08:00 CAT — check for due premiums
+  if (cronInitialized) {
+    console.log('[Cron] Already initialized, skipping');
+    return;
+  }
+
+  // Daily premium due check at 08:00 CAT
+  const valid = cron.validate('0 8 * * *');
+  if (!valid) {
+    console.error('[Cron] Invalid schedule expression');
+    return;
+  }
+
   cron.schedule('0 8 * * *', () => {
-    console.log('[Cron] 08:00 — Premium due check');
     sendPremiumDueAlerts().catch(err => {
       console.error('[Cron] Premium due alert error:', err.message);
     });
   }, {
-    timezone: 'Africa/Gaborone'
+    timezone: TIMEZONE
   });
 
-  // Daily at 03:00 CAT — cleanup expired OTPs
-  cron.schedule('0 3 * * *', async () => {
-    const { cleanupExpiredOTPs } = require('./otp');
-    await cleanupExpiredOTPs();
+  // Expired OTP cleanup at 03:00 CAT
+  cron.schedule('0 3 * * *', () => {
+    const OTP = require('../models/OTP');
+    OTP.deleteMany({
+      used: true,
+      expiresAt: { $lt: new Date() }
+    }).then(result => {
+      console.log(`[Cron] Cleaned ${result.deletedCount} expired OTPs`);
+    }).catch(err => {
+      console.error('[Cron] OTP cleanup error:', err.message);
+    });
   }, {
-    timezone: 'Africa/Gaborone'
+    timezone: TIMEZONE
   });
 
-  console.log('[Cron] Jobs initialized (Premium due at 08:00, OTP cleanup at 03:00 CAT)');
+  cronInitialized = true;
+  console.log(`[Cron] Jobs initialized (timezone: ${TIMEZONE})`);
 }
 
-module.exports = {
-  sendPremiumDueAlerts,
-  sendClaimUpdateAlert,
-  initCronJobs
-};
+/**
+ * Manual trigger for claim update alerts.
+ */
+async function sendClaimUpdateAlert({ customerId, claimId, policyId, status, details }) {
+  console.log(`[Alerts] Claim update: ${claimId} → ${status}`);
+  // In v2.0, this would return data for Respond.io Response Mapping
+  // For now, just log it
+  return {
+    message: `Claim ${claimId} on policy ${policyId} updated to ${status}.`,
+    details
+  };
+}
+
+module.exports = { initCronJobs, sendPremiumDueAlerts, sendClaimUpdateAlert };
