@@ -1,12 +1,5 @@
 const mongoose = require('mongoose');
 
-/* Coverage details vary by policy type.
-   Life: nominee, termYears, maturityBenefit
-   Vehicle: make, model, year, registrationNo, engineNo
-   Health: networkType, preExisting, roomRentLimit
-   Property: propertyType, areaSqFt, constructionType, locationRisk
-*/
-
 const policySchema = new mongoose.Schema({
   policyId: {
     type: String,
@@ -17,8 +10,10 @@ const policySchema = new mongoose.Schema({
   customerId: {
     type: String,
     required: true,
-    ref: 'Customer',
     index: true
+    // NOTE: Intentionally NOT using ref: 'Customer' with ObjectId.
+    // Both schemas use String IDs (e.g., 'CUS-0001'), not MongoDB ObjectIds.
+    // Use manual lookups instead of .populate().
   },
   type: {
     type: String,
@@ -31,76 +26,56 @@ const policySchema = new mongoose.Schema({
     enum: ['Active', 'Pending', 'Lapsed', 'Claimed', 'Matured', 'Cancelled'],
     default: 'Active'
   },
+  currency: {
+    type: String,
+    default: 'BWP',
+    enum: ['BWP']
+  },
   premium: {
     amount: { type: Number, required: true, min: 0 },
     frequency: {
       type: String,
       required: true,
-      enum: ['Monthly', 'Quarterly', 'Half-Yearly', 'Yearly'],
-      default: 'Yearly'
+      enum: ['Monthly', 'Quarterly', 'Yearly']
     },
-    currency: { type: String, default: 'INR' }
+    nextDue: { type: Date }
   },
-  sumInsured: {
-    type: Number,
-    required: true,
-    min: 0
-  },
-  coverageDetails: {
-    // Life
-    nominee: String,
-    nomineeRelation: String,
-    termYears: Number,
-    maturityBenefit: Number,
-    // Vehicle
-    make: String,
-    model: String,
-    year: Number,
-    registrationNo: String,
-    engineNo: String,
-    // Health
+  coverage: {
+    sumInsured: { type: Number, required: true, min: 0 },
+    // Life-specific
+    nominee: { type: String },
+    termYears: { type: Number },
+    maturityBenefit: { type: Number },
+    // Vehicle-specific
+    make: { type: String },
+    model: { type: String },
+    year: { type: Number },
+    registrationNo: { type: String },
+    engineNo: { type: String },
+    // Health-specific
     networkType: { type: String, enum: ['Cashless', 'Reimbursement'] },
-    preExistingDiseases: [String],
-    roomRentLimit: String,
-    deductible: Number,
-    // Property
-    propertyType: String,
-    areaSqFt: Number,
-    constructionType: String,
+    preExisting: { type: Boolean, default: false },
+    roomRentLimit: { type: Number },
+    // Property-specific
+    propertyType: { type: String },
+    areaSqFt: { type: Number },
+    constructionType: { type: String },
     locationRisk: { type: String, enum: ['Low', 'Medium', 'High'] }
   },
-  startDate: {
-    type: Date,
-    required: true
-  },
-  endDate: {
-    type: Date,
-    required: true
-  },
-  nextPremiumDue: {
-    type: Date
-  },
+  startDate: { type: Date, required: true },
+  endDate: { type: Date, required: true },
   claims: [{
-    claimId: String,
-    filedDate: Date,
-    amount: Number,
+    claimId: { type: String },
     status: {
       type: String,
-      enum: ['Filed', 'Under Review', 'Approved', 'Rejected', 'Settled']
+      enum: ['Filed', 'Under Review', 'Approved', 'Settled', 'Rejected']
     },
-    description: String,
-    settledDate: Date,
-    settledAmount: Number
-  }],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
+    filedDate: { type: Date },
+    amount: { type: Number },
+    description: { type: String }
+  }]
 }, {
   timestamps: true
 });
-
-// Index for finding due premiums
-policySchema.index({ nextPremiumDue: 1, status: 1 });
 
 module.exports = mongoose.model('Policy', policySchema);
