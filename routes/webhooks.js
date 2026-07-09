@@ -17,12 +17,36 @@ const { normalizePhone, getPhoneVariants } = require('../utils/phone');
 // It tries multiple known formats and logs the raw payload for debugging.
 
 function parseRespondioPayload(body) {
-  // ── 1. Log raw payload for debugging (first 500 chars to keep logs readable) ──
-  console.log('[Webhook] Raw payload:', JSON.stringify(body).slice(0, 500));
+  console.log('[Webhook] Raw payload:', JSON.stringify(body).slice(0, 800));
 
   let phone = null;
   let text = null;
 
+  // ── Extract phone ──────────────────────────────────────────────────────
+  // Your actual payload: body.contact.phone
+  phone = body?.contact?.phone;
+
+  // Handle missing "+" prefix (Respond.io strips it sometimes)
+  if (phone && !phone.startsWith('+')) {
+    phone = '+' + phone;
+  }
+
+  // ── Extract message text ───────────────────────────────────────────────
+  // Your actual payload: body.message.message.text (nested "message" twice)
+  text = body?.message?.message?.text;
+
+  // ── Detect unresolved variables ────────────────────────────────────────
+  if (text && text.startsWith('$')) {
+    console.warn(`[Webhook] ⚠️  Variable NOT resolved: "${text}"`);
+    console.warn('[Webhook] This is a Respond.io config issue, not a server issue.');
+    text = null; // treat as missing so validation catches it properly
+  }
+
+  const eventType = body?.event_type || body?.event || 'unknown';
+  const contactId = body?.contact?.id || null;
+
+  return { phone, text, eventType, contactId };
+}
   // ── 2. Extract phone ──────────────────────────────────────────────────────
   // Try multiple paths where Respond.io may place the phone number
   const phonePaths = [
