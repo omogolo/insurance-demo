@@ -4,7 +4,6 @@ const otpSchema = new mongoose.Schema({
   customerId: {
     type: String,
     required: true,
-    ref: 'Customer',
     index: true
   },
   otp: {
@@ -20,6 +19,7 @@ const otpSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     required: true,
+    index: true
   },
   used: {
     type: Boolean,
@@ -33,16 +33,15 @@ const otpSchema = new mongoose.Schema({
   maxAttempts: {
     type: Number,
     default: 3
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
   }
 }, {
   timestamps: true
 });
 
-// Auto-expire index (TTL) — MongoDB cleans up after 2 hours
-otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 7200 });
+// Auto-delete expired OTPs after 2 hours (grace period beyond 1-hour expiry)
+otpSchema.index(
+  { expiresAt: 1 },
+  { expireAfterSeconds: 7200, partialFilterExpression: { used: true } }
+);
 
 module.exports = mongoose.model('OTP', otpSchema);
