@@ -8,7 +8,7 @@ const transactionSchema = new mongoose.Schema({
     enum: ['Premium Paid', 'Premium Due', 'Claim Filed', 'Claim Settled', 'Refund', 'Adjustment', 'Penalty']
   },
   description: { type: String, required: true },
-  amount: { type: Number, required: true }, // positive = credit, negative = debit
+  amount: { type: Number, required: true },
   runningBalance: { type: Number, required: true },
   referenceId: String
 }, { _id: false });
@@ -23,14 +23,14 @@ const statementSchema = new mongoose.Schema({
   policyId: {
     type: String,
     required: true,
-    ref: 'Policy',
     index: true
+    // No ref — String IDs, not ObjectIds
   },
   customerId: {
     type: String,
     required: true,
-    ref: 'Customer',
     index: true
+    // No ref — String IDs, not ObjectIds
   },
   period: {
     from: { type: Date, required: true },
@@ -43,10 +43,7 @@ const statementSchema = new mongoose.Schema({
     totalRefunds: { type: Number, default: 0 },
     outstandingBalance: { type: Number, default: 0 }
   },
-  generatedAt: {
-    type: Date,
-    default: Date.now
-  }
+  generatedAt: { type: Date, default: Date.now }
 }, {
   timestamps: true
 });
