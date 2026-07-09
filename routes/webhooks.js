@@ -47,7 +47,8 @@ function parseRespondioPayload(body) {
 
   return { phone, text, eventType, contactId };
 }
-  // ── 2. Extract phone ──────────────────────────────────────────────────────
+
+// ── 2. Extract phone ──────────────────────────────────────────────────────
   // Try multiple paths where Respond.io may place the phone number
   const phonePaths = [
     // Native format: data.contact.phones[0].phone
