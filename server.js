@@ -1,62 +1,56 @@
+// server.js — Production-ready entry point
 require('dotenv').config();
-
-// Crash handlers for clean Railway logs
-process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION:', err.message);
-  process.exit(1);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('UNHANDLED REJECTION:', reason);
-  process.exit(1);
-});
 
 const express = require('express');
 const mongoose = require('mongoose');
-const healthRoutes = require('./routes/health');
-const webhookRoutes = require('./routes/webhooks');
-const { initCronJobs } = require('./services/alerts');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Critical: Railway requires 0.0.0.0 binding
+const HOST = '0.0.0.0';
+
+// Middleware
 app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
 
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  next();
+// Health check (Railway uses this)
+app.get('/health', async (req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  res.json({
+    status: 'ok',
+    mongodb: dbStatus,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
 });
 
-app.use('/health', healthRoutes);
-app.use('/webhooks', webhookRoutes);
+// Routes
+app.use('/webhooks/respondio', require('./routes/webhooks'));
 
-app.get('/', (req, res) => {
-  res.json({ service: 'Insurance Demo v2.0 — BWP', status: 'alive' });
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found', path: req.path });
 });
 
-// Admin routes removed for clean demo, add back if needed
+// Global error handler
+app.use((err, req, res, _next) => {
+  console.error(`[ERROR] ${err.message}`, err.stack);
+  res.status(500).json({ error: 'Internal server error' });
+});
 
-async function start() {
-  if (!process.env.MONGO_URI) {
-    console.error('FATAL: MONGO_URI not set');
-    process.exit(1);
-  }
-  try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log(`[DB] Connected to MongoDB`);
-    initCronJobs();
-    
-    // THE RAILWAY FIX: Must bind to '0.0.0.0'
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`[Server] Running on port ${PORT}`);
+// Connect to DB then start server
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    app.listen(PORT, HOST, () => {
+      console.log(`[Server] Running on ${HOST}:${PORT}`);
     });
-  } catch (err) {
-    console.error('FATAL: DB Connection failed:', err.message);
+  })
+  .catch((err) => {
+    console.error(`[FATAL] MongoDB connection failed: ${err.message}`);
     process.exit(1);
-  }
-}
+  });
 
-process.on('SIGTERM', async () => { await mongoose.disconnect(); process.exit(0); });
-process.on('SIGINT', async () => { await mongoose.disconnect(); process.exit(0); });
-
-start();
+// Don't crash on unhandled rejections in production
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
