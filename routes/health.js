@@ -5,22 +5,19 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   const checks = {
     server: 'ok',
+    version: '2.0.0',
     timestamp: new Date().toISOString(),
     mongodb: 'disconnected',
     dbHost: 'unknown'
   };
 
-  // Check MongoDB connection state
   if (mongoose.connection.readyState === 1) {
     checks.mongodb = 'connected';
     checks.dbHost = mongoose.connection.host || 'atlas';
   } else if (mongoose.connection.readyState === 2) {
     checks.mongodb = 'connecting';
-  } else {
-    checks.mongodb = `disconnected (state: ${mongoose.connection.readyState})`;
   }
 
-  // Quick collection count check
   try {
     const Customer = require('../models/Customer');
     const Policy = require('../models/Policy');
