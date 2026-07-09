@@ -1,23 +1,6 @@
-# Dependencies
 node_modules/
-
-# Environment variables
 .env
-.env.local
-
-# Railway / Cloud
-railway.json
-
-# Local Windows tools
-*.exe
 *.bat
-*.cmd
-
-# Logs
-logs/
 *.log
-npm-debug.log*
-
-# OS junk
 .DS_Store
-Thumbs.db
+ngrok.exe
