@@ -17,11 +17,12 @@ const customerSchema = new mongoose.Schema({
     required: true,
     unique: true,
     index: true,
-    match: /^\+?[1-9]\d{6,14}$/
+    // Accepts international format: +267XXXXXXXX or 267XXXXXXXX
+    match: /^\+?267\d{8}$/
   },
   email: {
     type: String,
-    required: true,
+    required: false,  // ← FIX: Not all WhatsApp users have email
     lowercase: true,
     trim: true,
     match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -33,27 +34,15 @@ const customerSchema = new mongoose.Schema({
   address: {
     street: { type: String, required: true },
     city: { type: String, required: true },
-    state: { type: String, required: true },
-    pincode: { type: String, required: true, match: /^\d{6}$/ }
+    state: { type: String, required: true },  // Botswana: district
+    pincode: { type: String }
   },
   occupation: {
     type: String,
-    required: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
+    trim: true
   }
 }, {
-  timestamps: true
-});
-
-// Virtual for policy count
-customerSchema.virtual('policyCount', {
-  ref: 'Policy',
-  localField: 'customerId',
-  foreignField: 'customerId',
-  count: true
+  timestamps: true  // ← FIX: adds createdAt/updatedAt
 });
 
 module.exports = mongoose.model('Customer', customerSchema);
