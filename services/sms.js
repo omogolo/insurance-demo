@@ -1,60 +1,83 @@
 const axios = require('axios');
 
 const TEXTBW_URL = 'https://api.textbw.com/web_rest/api/sendSMS';
-const USERNAME = process.env.TEXTBW_USERNAME || 'demo_otp';
-const PASSWORD = process.env.TEXTBW_PASSWORD || '4eb:a901%14';
-const SENDER_ID = process.env.TEXTBW_SENDER_ID || 'Demo-OTP';
+const SMS_TIMEOUT_MS = 10000;
 
 /**
- * Send OTP via TextBW SMS API
- * @param {string} phone - Phone number from DB (e.g., "+26771234567")
- * @param {string} otp - 5-digit OTP
- * @returns {object} - { success: boolean, message: string }
+ * Send OTP via TextBW SMS API.
+ * Returns { success: boolean, errorReply?: string }
  */
-async function sendOTPSMS(phone, otp) {
-  // TextBW requires country code only (no '+')
-  const cleanPhone = phone.replace(/^\+/, '');
+async function sendSMS(mobileNumber, otp) {
+  const username = process.env.TEXTBW_USERNAME;
+  const password = process.env.TEXTBW_PASSWORD;
+  const senderId = process.env.TEXTBW_SENDER_ID || 'Demo-OTP';
 
-  const payload = {
-    username: USERNAME,
-    password: PASSWORD,
-    from: SENDER_ID,
-    mobile_number: cleanPhone,
-    data: `Your InsureBot verification code is ${otp}. Valid for 1 hour.`
-  };
+  // Validate config
+  if (!username || !password) {
+    console.error('[SMS] TEXTBW_USERNAME or TEXTBW_PASSWORD not set');
+    return {
+      success: false,
+      errorReply: '⚠️ SMS service is not configured. Please contact support.'
+    };
+  }
+
+  // TextBW requires country code only (no + sign)
+  const cleanNumber = String(mobileNumber).replace('+', '');
 
   try {
-    const response = await axios.post(TEXTBW_URL, payload, {
+    const response = await axios.post(TEXTBW_URL, {
+      username,
+      password,
+      from: senderId,
+      mobile_number: cleanNumber,
+      data: `Your InsureBot verification code is ${otp}. Valid for 1 hour.`
+    }, {
       headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
+      timeout: SMS_TIMEOUT_MS
     });
 
-    const status = response.data?.status;
+    console.log(`[SMS] Sent to ${cleanNumber}, status: ${response.data?.status}`);
 
-    if (status === 200 || status === '200') {
-      console.log(`[SMS] OTP sent successfully to ${cleanPhone}`);
-      return { success: true, message: 'SMS sent' };
-    } 
-    
-    // Handle specific TextBW error codes
-    if (status === 401 || status === '401') {
-      return { success: false, message: '⚠️ SMS service authentication failed. Please contact support.' };
-    }
-    if (status === 501 || status === '501') {
-      return { success: false, message: '⚠️ Our SMS service is temporarily unavailable. Please try again later.' };
-    }
-    if (status === 500 || status === '500') {
-      return { success: false, message: "⚠️ We couldn't send your OTP due to a network error. Please try again." };
-    }
+    switch (response.data?.status) {
+      case 200:
+      case '200':
+        return { success: true };
 
-    // Fallback for unknown statuses
-    console.error(`[SMS] Unknown status from TextBW:`, response.data);
-    return { success: false, message: "⚠️ An unknown SMS error occurred. Please try again." };
+      case 401:
+      case '401':
+        return {
+          success: false,
+          errorReply: '⚠️ SMS service authentication failed. Please contact support.'
+        };
 
-  } catch (err) {
-    console.error(`[SMS] Network error sending to ${cleanPhone}:`, err.message);
-    return { success: false, message: "⚠️ We couldn't send your OTP due to a network error. Please try again." };
+      case 500:
+      case '500':
+        return {
+          success: false,
+          errorReply: '⚠️ Could not send OTP due to a network error. Please try again.'
+        };
+
+      case 501:
+      case '501':
+        return {
+          success: false,
+          errorReply: '⚠️ SMS service is temporarily unavailable. Please try again later.'
+        };
+
+      default:
+        console.error(`[SMS] Unexpected status: ${response.data?.status}`, response.data);
+        return {
+          success: false,
+          errorReply: '⚠️ Could not send OTP. Please try again later.'
+        };
+    }
+  } catch (error) {
+    console.error(`[SMS] Request failed: ${error.message}`);
+    return {
+      success: false,
+      errorReply: '⚠️ Could not send OTP due to a network error. Please try again.'
+    };
   }
 }
 
-module.exports = { sendOTPSMS };
+module.exports = { sendSMS };
