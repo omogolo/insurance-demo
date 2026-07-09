@@ -1,268 +1,339 @@
+// routes/webhooks.js
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
+
 const Customer = require('../models/Customer');
 const Policy = require('../models/Policy');
-const Statement = require('../models/Statement');
-const { createOTP, validateOTP } = require('../services/otp');
+const OTP = require('../models/OTP');
 const { sendSMS } = require('../services/sms');
-const {
-  normalizePhone,
-  getPhoneVariants,
-  policySummaryLine,
-  buildStatementMessage,
-  formatCurrency,
-  formatDate,
-  truncateForWhatsApp
-} = require('../utils/helpers');
+const { normalizePhone, getPhoneVariants } = require('../utils/phone');
 
-// ─── In-memory session state ──────────────────────────────────────────
-// NOTE: This is acceptable for a demo with <50 concurrent users.
-// For production, replace with MongoDB-backed sessions or Redis.
-const sessions = new Map();
+// ─── Respond.io Native Payload Parser ──────────────────────────────────────────
+// Respond.io sends its default webhook payload with this general structure:
+//   { event: "messageCreated", data: { message: {...}, contact: {...}, channel: {...} } }
+//
+// This helper extracts the two fields we need: phone and text.
+// It tries multiple known formats and logs the raw payload for debugging.
 
-function getSession(phone) { return sessions.get(phone); }
+function parseRespondioPayload(body) {
+  // ── 1. Log raw payload for debugging (first 500 chars to keep logs readable) ──
+  console.log('[Webhook] Raw payload:', JSON.stringify(body).slice(0, 500));
 
-function setSession(phone, state, data = {}, ttlMinutes = 10) {
-  sessions.set(phone, {
-    state,
-    data,
-    expiresAt: Date.now() + ttlMinutes * 60 * 1000
-  });
+  let phone = null;
+  let text = null;
+
+  // ── 2. Extract phone ──────────────────────────────────────────────────────
+  // Try multiple paths where Respond.io may place the phone number
+  const phonePaths = [
+    // Native format: data.contact.phones[0].phone
+    () => body?.data?.contact?.phones?.[0]?.phone,
+    // Native format: data.contact.phone (some versions)
+    () => body?.data?.contact?.phone,
+    // Shortcut: contact.phones[0].phone
+    () => body?.contact?.phones?.[0]?.phone,
+    // Shortcut: contact.phone
+    () => body?.contact?.phone,
+    // Array of phone strings: contact.phones (string array)
+    () => {
+      const phones = body?.data?.contact?.phones || body?.contact?.phones;
+      if (Array.isArray(phones) && typeof phones[0] === 'string') return phones[0];
+      return null;
+    },
+  ];
+
+  for (const fn of phonePaths) {
+    const val = fn();
+    if (val) {
+      phone = val.trim();
+      break;
+    }
+  }
+
+  // ── 3. Extract message text ───────────────────────────────────────────────
+  const textPaths = [
+    // Native: data.message.payload.text
+    () => body?.data?.message?.payload?.text,
+    // Native: data.message.text
+    () => body?.data?.message?.text,
+    // Native: data.message.content (some versions)
+    () => body?.data?.message?.content,
+    // Shortcut: message.payload.text
+    () => body?.message?.payload?.text,
+    // Shortcut: message.text
+    () => body?.message?.text,
+  ];
+
+  for (const fn of textPaths) {
+    const val = fn();
+    if (val && typeof val === 'string') {
+      text = val.trim().toLowerCase();
+      break;
+    }
+  }
+
+  // ── 4. Extract event type ─────────────────────────────────────────────────
+  const eventType = body?.event || body?.event_type || 'unknown';
+
+  // ── 5. Extract contact ID ─────────────────────────────────────────────────
+  const contactId =
+    body?.data?.contact?.id ||
+    body?.contact?.id ||
+    body?.contactId ||
+    null;
+
+  return { phone, text, eventType, contactId };
 }
 
-function clearSession(phone) { sessions.delete(phone); }
+// ─── Input Validation ────────────────────────────────────────────────────────
 
-// Clean expired sessions every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [phone, session] of sessions) {
-    if (session.expiresAt < now) sessions.delete(phone);
-  }
-}, 5 * 60 * 1000).unref(); // .unref() prevents this from keeping the process alive
+function validatePayload(parsed) {
+  const errors = [];
 
-// ─── Payload Extraction with Validation ───────────────────────────────
-function extractPayload(body) {
-  if (!body || typeof body !== 'object') {
-    return { error: 'Empty or invalid request body' };
+  if (!parsed.phone) {
+    errors.push('Phone number not found in webhook payload');
+  } else if (!/^\+?\d{8,15}$/.test(parsed.phone.replace(/\s/g, ''))) {
+    errors.push(`Invalid phone format: ${parsed.phone}`);
   }
 
-  // Support both Respond.io workflow JSON and raw webhook formats
-  const contact = body.contact || {};
-  const message = body.message || {};
-
-  let phone = contact.phone || '';
-  let text = '';
-
-  // Handle nested message.message.text (workflow format) or message.text (raw webhook)
-  if (typeof message.message === 'object' && message.message.text) {
-    text = message.message.text;
-  } else if (typeof message.text === 'string') {
-    text = message.text;
+  if (!parsed.text) {
+    errors.push('Message text not found in webhook payload');
   }
 
-  if (!phone) {
-    return { error: 'No phone number in payload' };
+  if (!parsed.eventType) {
+    errors.push('Event type missing from payload');
   }
 
-  return { phone: normalizePhone(phone), text: text.trim().toLowerCase() };
+  return { valid: errors.length === 0, errors };
 }
 
-// ─── Customer Lookup with Phone Variant Fallback ──────────────────────
+// ─── Customer Lookup ──────────────────────────────────────────────────────────
+
 async function findCustomer(phone) {
-  const variants = getPhoneVariants(phone);
+  const normalized = normalizePhone(phone);
+
+  // Try exact match first
+  let customer = await Customer.findOne({ phone: normalized }).populate('policies');
+  if (customer) return customer;
+
+  // Try all phone variants (e.g., with/without +267, with/without leading 0)
+  const variants = getPhoneVariants(normalized);
   for (const variant of variants) {
-    const customer = await Customer.findOne({ phone: variant });
+    customer = await Customer.findOne({ phone: variant }).populate('policies');
     if (customer) return customer;
   }
+
   return null;
 }
 
-// ─── Main Webhook Handler ─────────────────────────────────────────────
-router.post('/respondio', async (req, res) => {
-  console.log('[Webhook] POST /webhooks/respondio');
+// ─── OTP Generation ───────────────────────────────────────────────────────────
 
-  // Step 1: Validate payload
-  const payload = extractPayload(req.body);
-  if (payload.error) {
-    console.error(`[Webhook] Invalid payload: ${payload.error}`);
-    return res.json({ reply: '⚠️ Could not process your message. Please try again.' });
+function generateOTP() {
+  return crypto.randomInt(10000, 99999).toString();
+}
+
+async function createOTP(customerId, purpose) {
+  const otp = generateOTP();
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+  await OTP.deleteMany({ customerId, used: false }); // Clear any existing active OTP
+  await OTP.create({ customerId, otp, purpose, expiresAt });
+
+  return otp;
+}
+
+// ─── Response Mapping Helpers ─────────────────────────────────────────────────
+// v2.0 Architecture: Server returns JSON, Respond.io maps it to reply templates.
+// All responses follow this structure for Response Mapping.
+
+function response(action, data = {}) {
+  return res => res.json({ action, ...data });
+}
+
+// ─── Route Handlers ──────────────────────────────────────────────────────────
+
+// Handle text message commands
+async function handleTextCommand(parsed) {
+  const { text } = parsed;
+  const customer = await findCustomer(parsed.phone);
+
+  // Unknown contact
+  if (!customer) {
+    return {
+      action: 'reply',
+      type: 'text',
+      message: `Sorry, we could not find an account associated with ${parsed.phone}. Please contact support.`,
+      customerFound: false,
+    };
   }
 
-  const { phone, text } = payload;
-  console.log(`[Webhook] Phone: ${phone} | Text: "${text}"`);
+  const customerData = {
+    action: 'reply',
+    customerFound: true,
+    customerName: customer.name,
+    customerId: customer._id,
+  };
 
-  // Step 2: Route based on text
-  try {
-    let reply;
+  // Route based on message text
+  switch (text) {
+    // ── Main Menu ──────────────────────────────────────────────────────────
+    case 'hi':
+    case 'hello':
+    case 'menu':
+    case '1':
+      return {
+        ...customerData,
+        type: 'menu',
+        message: `Hello ${customer.name}! 👋\n\nHow can I help you today?\n\n1️⃣ View My Policies\n2️⃣ Policy Details\n3️⃣ Make a Claim\n4️⃣ Speak to an Agent\n\nReply with a number or keyword.`,
+      };
 
-    switch (text) {
-      case 'hi':
-      case 'hello':
-      case 'help':
-        reply = getMenu();
-        break;
-      case 'policies':
-        reply = await handlePolicies(phone);
-        break;
-      case 'statement':
-        reply = await handleStatementFlow(phone, 'select_policy');
-        break;
-      case 'cancel':
-        clearSession(phone);
-        reply = '❌ Cancelled. Type *hi* to start again.';
-        break;
-      default:
-        reply = await handleSessionState(phone, text);
+    // ── View Policies (requires OTP) ──────────────────────────────────────
+    case 'policies':
+    case 'view policies':
+    case 'my policies':
+    case '2': {
+      const otp = await createOTP(customer._id.toString(), 'policy_details');
+      try {
+        await sendSMS(
+          parsed.phone,
+          `Your InsureBot verification code is: ${otp}. Valid for 5 minutes. Do not share this code.`
+        );
+        return {
+          ...customerData,
+          type: 'otp_sent',
+          message: `We've sent a 5-digit verification code to ${parsed.phone}. Please reply with the code to view your policies.`,
+          otpSent: true,
+        };
+      } catch (smsError) {
+        console.error('[SMS] Failed to send OTP:', smsError.message);
+        return {
+          ...customerData,
+          type: 'error',
+          message: 'We could not send your verification code at this time. Please try again later.',
+        };
+      }
     }
 
-    return res.json({ reply: truncateForWhatsApp(reply || 'An unexpected error occurred. Please type *hi*.') });
+    // ── OTP Verification ──────────────────────────────────────────────────
+    default:
+      if (/^\d{5}$/.test(text)) {
+        // User sent a 5-digit code — verify OTP
+        const otpRecord = await OTP.findOne({
+          customerId: customer._id,
+          otp: text,
+          used: false,
+          expiresAt: { $gt: new Date() },
+        });
+
+        if (!otpRecord) {
+          return {
+            ...customerData,
+            type: 'otp_invalid',
+            message: 'Invalid or expired code. Please request a new one by replying "policies".',
+            attempts: (otpRecord?.attempts || 0) + 1,
+          };
+        }
+
+        // Mark OTP as used
+        await OTP.updateOne(
+          { _id: otpRecord._id },
+          { $set: { used: true }, $inc: { attempts: 1 } }
+        );
+
+        // Return policy list based on OTP purpose
+        if (otpRecord.purpose === 'policy_details') {
+          const policies = customer.policies || [];
+          if (policies.length === 0) {
+            return {
+              ...customerData,
+              type: 'policy_list',
+              message: `You have no active policies on record. Contact us for assistance.`,
+              policyCount: 0,
+            };
+          }
+
+          const policyLines = policies
+            .map((p, i) => `${i + 1}. ${p.policyNumber} — ${p.type} (${p.status})`)
+            .join('\n');
+
+          return {
+            ...customerData,
+            type: 'policy_list',
+            message: `Here are your policies:\n\n${policyLines}\n\nReply with a policy number for details.`,
+            policyCount: policies.length,
+            policies: policies.map(p => ({
+              number: p.policyNumber,
+              type: p.type,
+              status: p.status,
+              premium: p.premium,
+              currency: p.currency,
+            })),
+          };
+        }
+
+        return {
+          ...customerData,
+          type: 'otp_verified',
+          message: 'Verified successfully.',
+        };
+      }
+
+      // Unrecognized command
+      return {
+        ...customerData,
+        type: 'fallback',
+        message: `I didn't understand "${text}". Reply "menu" to see available options.`,
+      };
+  }
+}
+
+// ─── Main Webhook Endpoint ────────────────────────────────────────────────────
+
+router.post('/respondio', async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] POST /webhooks/respondio`);
+  console.log('[Webhook] POST /webhooks/respondio');
+
+  try {
+    // Parse the native Respond.io payload
+    const parsed = parseRespondioPayload(req.body);
+    console.log(`[Webhook] Phone: ${parsed.phone || 'NOT FOUND'} | Text: ${parsed.text || 'NOT FOUND'} | Event: ${parsed.eventType}`);
+
+    // Validate essential fields
+    const validation = validatePayload(parsed);
+    if (!validation.valid) {
+      console.warn('[Webhook] Validation failed:', validation.errors.join(', '));
+      return res.status(400).json({
+        action: 'error',
+        errors: validation.errors,
+        message: 'Invalid webhook payload.',
+      });
+    }
+
+    // Only process message events
+    const messageEvents = ['messageCreated', 'message.sent', 'message.received'];
+    if (!messageEvents.includes(parsed.eventType) && parsed.eventType !== 'unknown') {
+      console.log(`[Webhook] Ignoring event type: ${parsed.eventType}`);
+      return res.status(200).json({ action: 'ignored', eventType: parsed.eventType });
+    }
+
+    // Handle the command
+    const result = await handleTextCommand(parsed);
+    return res.json(result);
+
   } catch (error) {
-    console.error(`[Webhook] Handler error: ${error.message}`);
-    return res.json({ reply: '⚠️ An error occurred. Please try again later or type *hi* for the menu.' });
+    console.error('[Webhook] Unhandled error:', error);
+    return res.status(500).json({
+      action: 'error',
+      message: 'Internal server error.',
+    });
   }
 });
 
-// ─── Menu ─────────────────────────────────────────────────────────────
-function getMenu() {
-  return `🛡️ *InsureBot v2.0 — BWP*
+// ─── Health Check ─────────────────────────────────────────────────────────────
 
-Reply with a keyword:
-• *policies* — View your policy list
-• *statement* — Get policy statement (OTP required)
-• *help* — Show this menu`;
-}
-
-// ─── Policies ─────────────────────────────────────────────────────────
-async function handlePolicies(phone) {
-  const customer = await findCustomer(phone);
-  if (!customer) {
-    return '❌ No account found for this number. Please contact support.';
-  }
-
-  const policies = await Policy.find({ customerId: customer.customerId });
-  if (policies.length === 0) {
-    return `ℹ️ ${customer.name}, you have no policies on file.`;
-  }
-
-  let reply = `📋 *Your Policies (${policies.length})*\n\n`;
-  policies.forEach((p) => {
-    reply += policySummaryLine(p) + '\n\n';
-  });
-
-  return reply.trim();
-}
-
-// ─── Statement Flow (State Machine) ───────────────────────────────────
-async function handleStatementFlow(phone, state, data = {}) {
-  if (state === 'select_policy') {
-    const customer = await findCustomer(phone);
-    if (!customer) {
-      return '❌ No account found for this number.';
-    }
-
-    const policies = await Policy.find({
-      customerId: customer.customerId,
-      status: 'Active'
-    });
-
-    if (policies.length === 0) {
-      return 'ℹ️ You have no active policies.';
-    }
-
-    setSession(phone, 'awaiting_policy_selection', { customerId: customer.customerId, policies });
-
-    let reply = `📋 *Select a policy for statement:*\n\n`;
-    policies.forEach((p, i) => {
-      reply += `${i + 1}. ${p.policyId} — ${p.type} (${p.status})\n`;
-    });
-    reply += '\nReply with a number or *cancel*.';
-
-    return reply;
-  }
-
-  return 'Type *hi* to start again.';
-}
-
-// ─── Session State Handler ────────────────────────────────────────────
-async function handleSessionState(phone, text) {
-  const session = getSession(phone);
-  if (!session) {
-    return "I didn't understand that. Type *hi* for the menu.";
-  }
-
-  switch (session.state) {
-    case 'awaiting_policy_selection': {
-      const num = parseInt(text, 10);
-      if (isNaN(num) || num < 1 || num > session.data.policies.length) {
-        return `⚠️ Please enter a number between 1 and ${session.data.policies.length}, or type *cancel*.`;
-      }
-
-      const selectedPolicy = session.data.policies[num - 1];
-      setSession(phone, 'awaiting_otp', {
-        customerId: session.data.customerId,
-        policyId: selectedPolicy.policyId
-      });
-
-      // Generate and send OTP via SMS
-      try {
-        const otp = await createOTP(session.data.customerId, 'statement_retrieval');
-        const customer = await Customer.findOne({ customerId: session.data.customerId });
-
-        // Strip the + for TextBW (requires country code only)
-        const mobileForSMS = customer.phone.replace('+', '');
-        const smsResult = await sendSMS(mobileForSMS, otp);
-
-        if (smsResult.success) {
-          return `🔐 *OTP Sent via SMS*\n\nA 5-digit code has been sent to ${customer.phone}.\n\n⚠️ _Please wait at least 5 minutes before entering the OTP to ensure it arrives._\n\nReply with the code to continue, or type *cancel*.`;
-        } else {
-          // SMS failed — return the specific error
-          return smsResult.errorReply;
-        }
-      } catch (err) {
-        console.error(`[Webhook] OTP flow error: ${err.message}`);
-        clearSession(phone);
-        return '⚠️ Could not send OTP. Please try again later.';
-      }
-    }
-
-    case 'awaiting_otp': {
-      // Validate OTP format
-      if (!/^\d{5}$/.test(text)) {
-        return '⚠️ Please enter the 5-digit OTP code, or type *cancel*.';
-      }
-
-      const result = await validateOTP(session.data.customerId, text, 'statement_retrieval');
-
-      if (!result.valid) {
-        if (result.reason === 'expired') {
-          clearSession(phone);
-          return '⏰ OTP expired. Type *statement* to request a new one.';
-        }
-        if (result.reason === 'max_attempts') {
-          clearSession(phone);
-          return '🔒 Too many failed attempts. Type *statement* to request a new OTP.';
-        }
-        return `❌ Invalid OTP. ${result.remainingAttempts} attempt(s) remaining. Try again or type *cancel*.`;
-      }
-
-      // OTP valid — fetch statement
-      clearSession(phone);
-      const statement = await Statement.findOne({
-        policyId: session.data.policyId
-      });
-
-      if (!statement) {
-        return '❌ No statement found for this policy. Please contact support.';
-      }
-
-      const customer = await Customer.findOne({ customerId: session.data.customerId });
-      return buildStatementMessage(customer, statement);
-    }
-
-    default:
-      clearSession(phone);
-      return "Session expired. Type *hi* to start again.";
-  }
-}
+router.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 module.exports = router;
