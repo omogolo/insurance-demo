@@ -1,6 +1,24 @@
+# Dependencies
 node_modules/
+
+# Environment
 .env
-*.bat
-*.log
+.env.local
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Local dev tools
+*.bat
+*.exe
 ngrok.exe
+cloudflared.exe
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
