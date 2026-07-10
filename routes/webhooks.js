@@ -50,12 +50,12 @@ function validatePayload(parsed) {
 
 async function findCustomer(phone) {
   const normalized = normalizePhone(phone);
-  let customer = await Customer.findOne({ phone: normalized }).populate('policies');
+  let customer = await Customer.findOne({ phone: normalized });
   if (customer) return customer;
 
   const variants = getPhoneVariants(normalized);
   for (const variant of variants) {
-    customer = await Customer.findOne({ phone: variant }).populate('policies');
+    customer = await Customer.findOne({ phone: variant });
     if (customer) return customer;
   }
   return null;
