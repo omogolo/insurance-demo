@@ -157,16 +157,40 @@ async function handleTextCommand(parsed) {
           { $set: { used: true }, $inc: { attempts: 1 } }
         );
 
-        if (otpRecord.purpose === 'policy_details') {
-          const policies = customer.policies || [];
-          if (policies.length === 0) {
-            return {
-              ...base,
-              type: 'policy_list',
-              message: 'You have no active policies on record.',
-              policyCount: 0,
-            };
-          }
+        // NEW — query Policy collection directly:
+if (otpRecord.purpose === 'policy_details') {
+  const policies = await Policy.find({ customer: customer._id });
+  
+  if (policies.length === 0) {
+    return {
+      ...base,
+      type: 'policy_list',
+      message: 'You have no active policies on record.',
+      policyCount: 0,
+    };
+  }
+
+  const policyLines = policies
+    .map(function (p, i) {
+      return (i + 1) + '. ' + p.policyNumber + ' - ' + p.type + ' (' + p.status + ')';
+    })
+    .join('\n');
+
+  return {
+    ...base,
+    type: 'policy_list',
+    message: 'Your policies:\n\n' + policyLines + '\n\nReply with a policy number for details.',
+    policyCount: policies.length,
+    policies: policies.map(function (p) {
+      return {
+        number: p.policyNumber,
+        type: p.type,
+        status: p.status,
+        premium: p.premium,
+      };
+    }),
+  };
+}
 
           const policyLines = policies
             .map(function (p, i) {
