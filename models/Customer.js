@@ -40,8 +40,7 @@ const customerSchema = new mongoose.Schema({
   occupation: {
     type: String,
     trim: true
-  }
-    
+  } 
   session: {
     action: {
       type: String,
