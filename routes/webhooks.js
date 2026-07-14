@@ -95,7 +95,7 @@ async function createAndSendOTP(customer, phone, purpose) {
 }
 
 // ============================================================
-// SESSION HELPERS (for multi-turn flows)
+// SESSION HELPERS
 // ============================================================
 
 var SESSION_EXPIRY_MS = 10 * 60 * 1000;
@@ -141,13 +141,14 @@ function generateClaimNumber() {
 
 function generateStatement(customer, policies) {
   if (!policies || policies.length === 0) {
-    return 'No active policies found for your account.';
+    return 'No active policies were found on your account.\n\nIf you believe this is an error, please reply "agent" to speak with a member of our team.';
   }
 
   var lines = [];
   lines.push('INSURANCE STATEMENT');
+  lines.push('━━━━━━━━━━━━━━━━━━');
   lines.push('Account: ' + customer.name);
-  lines.push('Generated: ' + new Date().toLocaleDateString('en-GB', {
+  lines.push('Date: ' + new Date().toLocaleDateString('en-GB', {
     day: '2-digit', month: 'short', year: 'numeric'
   }));
   lines.push('');
@@ -157,18 +158,16 @@ function generateStatement(customer, policies) {
 
   for (var i = 0; i < policies.length; i++) {
     var p = policies[i];
-    lines.push((i + 1) + '. ' + p.policyNumber + ' - ' + p.type + ' Insurance');
+    var num = (i + 1) + '.';
+    lines.push(num + ' ' + p.policyNumber + ' — ' + p.type + ' Insurance');
     lines.push('   Status: ' + p.status);
     lines.push('   Premium: BWP ' + p.premium + '/month');
     lines.push('   Coverage: BWP ' + p.coverAmount.toLocaleString());
 
     if (p.startDate) {
-      lines.push('   From: ' + new Date(p.startDate).toLocaleDateString('en-GB', {
+      lines.push('   Period: ' + new Date(p.startDate).toLocaleDateString('en-GB', {
         day: '2-digit', month: 'short', year: 'numeric'
-      }));
-    }
-    if (p.endDate) {
-      lines.push('   To: ' + new Date(p.endDate).toLocaleDateString('en-GB', {
+      }) + ' – ' + new Date(p.endDate).toLocaleDateString('en-GB', {
         day: '2-digit', month: 'short', year: 'numeric'
       }));
     }
@@ -192,12 +191,12 @@ function generateStatement(customer, policies) {
     totalCover += p.coverAmount || 0;
   }
 
-  lines.push('---');
+  lines.push('━━━━━━━━━━━━━━━━━━');
   lines.push('Total Policies: ' + policies.length);
   lines.push('Total Monthly Premium: BWP ' + totalPremium.toLocaleString());
   lines.push('Total Coverage: BWP ' + totalCover.toLocaleString());
   lines.push('');
-  lines.push('Reply "menu" for more options or "agent" to speak with us.');
+  lines.push('For enquiries, reply "agent" or email support@insurebot.co.bw');
 
   return lines.join('\n');
 }
@@ -222,7 +221,7 @@ function generateReminders(policies) {
   }
 
   if (upcoming.length === 0) {
-    return 'No upcoming premium payments in the next 30 days.\n\nReply "menu" for more options.';
+    return 'You have no premium payments due in the next 30 days.\n\nYour account is up to date. Reply "menu" for more options.';
   }
 
   upcoming.sort(function (a, b) {
@@ -230,7 +229,10 @@ function generateReminders(policies) {
   });
 
   var lines = [];
-  lines.push('UPCOMING PREMIUM PAYMENTS');
+  lines.push('UPCOMING PAYMENTS');
+  lines.push('━━━━━━━━━━━━━━━━━━');
+  lines.push('');
+  lines.push('You have the following premiums due in the next 30 days:');
   lines.push('');
 
   var total = 0;
@@ -240,14 +242,16 @@ function generateReminders(policies) {
       day: '2-digit', month: 'short'
     });
     lines.push((i + 1) + '. ' + p.policyNumber + ' (' + p.type + ')');
-    lines.push('   BWP ' + p.premium + ' due ' + dateStr);
+    lines.push('   Amount: BWP ' + p.premium);
+    lines.push('   Due: ' + dateStr);
+    lines.push('');
     total += p.premium || 0;
   }
 
+  lines.push('Total Amount Due: BWP ' + total.toLocaleString());
   lines.push('');
-  lines.push('Total Due: BWP ' + total.toLocaleString());
-  lines.push('');
-  lines.push('Reply "statements" for full details or "menu" for all options.');
+  lines.push('To view your full statement, reply "statements".');
+  lines.push('Reply "menu" for all options.');
 
   return lines.join('\n');
 }
@@ -280,13 +284,13 @@ function makeResponse(customer, type, message, extra) {
 
 function handleMenu(customer) {
   return makeResponse(customer, 'menu',
-    'Hello ' + customer.name + '! How can I help you?\n\n' +
-    '1. My Policies\n' +
-    '2. My Statements\n' +
-    '3. File a Claim\n' +
-    '4. Premium Reminders\n' +
-    '5. Speak to an Agent\n\n' +
-    'Reply with a number or keyword.'
+    'Welcome to InsureBot, ' + customer.name + '! How may we assist you today?\n\n' +
+    '1 — View My Policies\n' +
+    '2 — Request a Statement\n' +
+    '3 — File a Claim\n' +
+    '4 — Upcoming Payments\n' +
+    '5 — Speak to an Agent\n\n' +
+    'Kindly reply with a number or keyword.'
   );
 }
 
@@ -294,13 +298,13 @@ async function handlePolicies(customer, phone) {
   var result = await createAndSendOTP(customer, phone, 'policy_details');
   if (result.success) {
     return makeResponse(customer, 'otp_sent',
-      'To protect your information, we need to verify your identity.\n\n' +
-      'A 5-digit code has been sent to ' + phone + '.\n\n' +
-      'Reply with the code to view your policies.'
+      'For your security, a one-time verification code has been sent to ' + phone + ' via SMS.\n\n' +
+      'Please reply with the 5-digit code to view your policies.'
     );
   }
   return makeResponse(customer, 'error',
-    'Could not send verification code. Please try again later.'
+    'We apologise for the inconvenience. We were unable to process your request at this time.\n\n' +
+    'Please try again in a few moments, or reply "agent" to speak with our team directly.'
   );
 }
 
@@ -308,13 +312,13 @@ async function handleStatements(customer, phone) {
   var result = await createAndSendOTP(customer, phone, 'statement_retrieval');
   if (result.success) {
     return makeResponse(customer, 'otp_sent',
-      'To protect your information, we need to verify your identity.\n\n' +
-      'A 5-digit code has been sent to ' + phone + '.\n\n' +
-      'Reply with the code to view your statements.'
+      'For your security, a one-time verification code has been sent to ' + phone + ' via SMS.\n\n' +
+      'Please reply with the 5-digit code to retrieve your statement.'
     );
   }
   return makeResponse(customer, 'error',
-    'Could not send verification code. Please try again later.'
+    'We apologise for the inconvenience. We were unable to process your request at this time.\n\n' +
+    'Please try again in a few moments, or reply "agent" to speak with our team directly.'
   );
 }
 
@@ -322,13 +326,13 @@ async function handleClaim(customer, phone) {
   var result = await createAndSendOTP(customer, phone, 'claim_info');
   if (result.success) {
     return makeResponse(customer, 'otp_sent',
-      'To file a claim, we need to verify your identity.\n\n' +
-      'A 5-digit code has been sent to ' + phone + '.\n\n' +
-      'Reply with the code to continue.'
+      'For your security, a one-time verification code has been sent to ' + phone + ' via SMS.\n\n' +
+      'Please reply with the 5-digit code to proceed with your claim.'
     );
   }
   return makeResponse(customer, 'error',
-    'Could not send verification code. Please try again later.'
+    'We apologise for the inconvenience. We were unable to process your request at this time.\n\n' +
+    'Please try again in a few moments, or reply "agent" to speak with our team directly.'
   );
 }
 
@@ -340,14 +344,15 @@ async function handleReminders(customer) {
 
 function handleAgent(customer) {
   return makeResponse(customer, 'agent',
-    'Connecting you with an insurance agent. Please hold...\n\n' +
-    'Our team typically responds within a few minutes during business hours (Mon-Fri, 8am-5pm CAT).\n\n' +
-    'You can also email us at support@insurebot.co.bw'
+    'Thank you for contacting InsureBot.\n\n' +
+    'Connecting you with one of our insurance consultants. Please allow a few moments.\n\n' +
+    'Our operating hours are Monday to Friday, 08:00 – 17:00 CAT.\n\n' +
+    'Alternatively, you may email us at support@insurebot.co.bw and we will respond within one business day.'
   );
 }
 
 // ============================================================
-// OTP VERIFICATION (routes to correct feature based on purpose)
+// OTP VERIFICATION
 // ============================================================
 
 async function handleOTPVerification(customer, otpCode) {
@@ -360,10 +365,11 @@ async function handleOTPVerification(customer, otpCode) {
 
   if (!otpRecord) {
     return makeResponse(customer, 'otp_invalid',
-      'Invalid or expired code. Please request a new one by replying:\n' +
-      '- "policies" to view policies\n' +
-      '- "statements" to view statements\n' +
-      '- "claim" to file a claim'
+      'The code you entered is invalid or has expired.\n\n' +
+      'Please request a new verification code by replying:\n' +
+      '• "policies" to view your policies\n' +
+      '• "statements" to retrieve a statement\n' +
+      '• "claim" to file a claim'
     );
   }
 
@@ -392,34 +398,38 @@ async function handleOTPVerification(customer, otpCode) {
 function handlePolicyDetails(customer, policies) {
   if (policies.length === 0) {
     return makeResponse(customer, 'policy_list',
-      'No active policies found on your account.\n\n' +
-      'If you believe this is an error, reply "agent" to speak with us.',
+      'No active policies were found on your account.\n\n' +
+      'If you believe this is an error, please reply "agent" to speak with a member of our team.',
       { policyCount: 0 }
     );
   }
 
-  var lines = ['YOUR POLICIES', ''];
+  var lines = [];
+  lines.push('Here are your active policies:');
+  lines.push('');
   var totalPremium = 0;
 
   for (var i = 0; i < policies.length; i++) {
     var p = policies[i];
-    lines.push((i + 1) + '. ' + p.policyNumber + ' - ' + p.type);
+    lines.push((i + 1) + '. ' + p.policyNumber + ' — ' + p.type + ' Insurance');
     lines.push('   Status: ' + p.status);
-    lines.push('   Premium: BWP ' + p.premium + '/month');
+    lines.push('   Monthly Premium: BWP ' + p.premium);
     lines.push('   Coverage: BWP ' + p.coverAmount.toLocaleString());
 
     if (p.type === 'Vehicle' && p.vehicleDetails) {
-      lines.push('   Vehicle: ' + p.vehicleDetails.make + ' ' + p.vehicleDetails.model + ' (' + p.vehicleDetails.registration + ')');
+      var v = p.vehicleDetails;
+      lines.push('   Vehicle: ' + (v.year || '') + ' ' + (v.make || '') + ' ' + (v.model || '') + ' (' + (v.registration || 'N/A') + ')');
     }
     if (p.type === 'Property' && p.propertyDetails) {
-      lines.push('   Property: ' + p.propertyDetails.type + ' at ' + p.propertyDetails.address);
+      var prop = p.propertyDetails;
+      lines.push('   Property: ' + (prop.type || 'N/A') + ' at ' + (prop.address || 'N/A'));
     }
 
     lines.push('');
     totalPremium += p.premium || 0;
   }
 
-  lines.push('Total Premium: BWP ' + totalPremium.toLocaleString() + '/month');
+  lines.push('Total Monthly Premium: BWP ' + totalPremium.toLocaleString());
   lines.push('');
   lines.push('Reply "menu" for more options.');
 
@@ -438,29 +448,35 @@ function handleStatementResponse(customer, policies) {
 async function handleClaimInit(customer, policies) {
   if (policies.length === 0) {
     return makeResponse(customer, 'error',
-      'No active policies found to file a claim against.\n\n' +
-      'Reply "agent" to speak with our team.'
+      'No active policies were found to file a claim against.\n\n' +
+      'Please reply "agent" to speak with our team.'
     );
   }
 
   await setSession(customer, 'awaiting_claim_policy', {});
 
-  var lines = ['CLAIM FILING - Select a Policy', ''];
+  var lines = [];
+  lines.push('CLAIM FILING');
+  lines.push('━━━━━━━━━━━');
+  lines.push('');
+  lines.push('Please select the policy you wish to file a claim against:');
+  lines.push('');
 
   for (var i = 0; i < policies.length; i++) {
     var p = policies[i];
-    lines.push((i + 1) + '. ' + p.policyNumber + ' - ' + p.type + ' (' + p.status + ')');
+    lines.push((i + 1) + '. ' + p.policyNumber + ' — ' + p.type + ' (' + p.status + ')');
   }
 
   lines.push('');
-  lines.push('Reply with the policy number you want to file a claim on.');
-  lines.push('Or reply "cancel" to cancel.');
+  lines.push('Reply with the policy number or its corresponding number.');
+  lines.push('');
+  lines.push('Reply "cancel" at any time to exit.');
 
   return makeResponse(customer, 'claim_select_policy', lines.join('\n'));
 }
 
 // ============================================================
-// SESSION CONTINUATION (multi-turn flows)
+// SESSION CONTINUATION
 // ============================================================
 
 async function handleSessionContinuation(customer, text) {
@@ -501,7 +517,8 @@ async function handleClaimPolicySelection(customer, text, session) {
 
   if (!selectedPolicy) {
     return makeResponse(customer, 'claim_invalid_policy',
-      'Policy "' + text + '" not found. Please reply with a valid policy number from the list.\n\nReply "cancel" to cancel.'
+      'Policy "' + text + '" was not found. Please reply with a valid policy number from the list.\n\n' +
+      'Reply "cancel" to exit.'
     );
   }
 
@@ -511,10 +528,10 @@ async function handleClaimPolicySelection(customer, text, session) {
   });
 
   return makeResponse(customer, 'claim_ask_reason',
-    'You selected: ' + selectedPolicy.policyNumber + ' (' + selectedPolicy.type + ')\n\n' +
-    'Please describe your claim in one message.\n\n' +
-    'Example: "Windscreen cracked in parking lot on 5 July"\n\n' +
-    'Or reply "cancel" to cancel.'
+    'You have selected: ' + selectedPolicy.policyNumber + ' (' + selectedPolicy.type + ')\n\n' +
+    'Kindly describe the reason for your claim in a single message.\n\n' +
+    'Example: "Windscreen cracked while parked at Game City on 5 July 2025."\n\n' +
+    'Reply "cancel" to exit.'
   );
 }
 
@@ -522,7 +539,7 @@ async function handleClaimReasonSubmission(customer, text, session) {
   if (text.toLowerCase() === 'cancel') {
     await clearSession(customer);
     return makeResponse(customer, 'claim_cancelled',
-      'Claim filing cancelled.\n\nReply "menu" to see other options.'
+      'Action cancelled.\n\nReply "menu" to return to the main menu.'
     );
   }
 
@@ -542,20 +559,21 @@ async function handleClaimReasonSubmission(customer, text, session) {
     console.error('[Claim] Failed to save:', err.message);
     await clearSession(customer);
     return makeResponse(customer, 'error',
-      'Something went wrong while filing your claim. Please try again or reply "agent" for help.'
+      'We apologise for the inconvenience. We were unable to process your request at this time.\n\n' +
+      'Please try again in a few moments, or reply "agent" to speak with our team directly.'
     );
   }
 
   await clearSession(customer);
 
   return makeResponse(customer, 'claim_filed',
-    'CLAIM FILED SUCCESSFULLY\n\n' +
-    'Reference: ' + claimNumber + '\n' +
+    'CLAIM SUBMITTED SUCCESSFULLY\n\n' +
+    'Reference Number: ' + claimNumber + '\n' +
     'Policy: ' + session.data.policyNumber + ' (' + session.data.policyType + ')\n' +
     'Description: ' + text + '\n' +
     'Status: Submitted\n\n' +
-    'Our team will review your claim within 3 business days.\n\n' +
-    'Reply "menu" for more options or "agent" to speak with us.',
+    'Your claim is now under review. A member of our team will contact you within 3 business days.\n\n' +
+    'Reply "menu" for more options or "agent" to speak with us directly.',
     { claimNumber: claimNumber }
   );
 }
@@ -573,12 +591,13 @@ async function handleTextCommand(parsed) {
       action: 'reply',
       type: 'text',
       customerFound: false,
-      message: 'Sorry, we could not find an account for ' + parsed.phone + '. Please contact support.',
+      message: 'We were unable to locate an account associated with your number.\n\n' +
+        'If you believe this is an error, please contact our support team at support@insurebot.co.bw or reply "agent" for assistance.',
       phone: parsed.phone
     };
   }
 
-  // Check for active session (multi-turn flow like claim filing)
+  // Check for active session (multi-turn flows like claim filing)
   if (text !== 'menu' && text !== 'hi' && text !== 'hello' && text !== 'cancel' && !/^\d{5}$/.test(text)) {
     var sessionResult = await handleSessionContinuation(customer, text);
     if (sessionResult) { return sessionResult; }
@@ -587,7 +606,9 @@ async function handleTextCommand(parsed) {
   // Cancel clears any active session
   if (text === 'cancel') {
     await clearSession(customer);
-    return makeResponse(customer, 'cancelled', 'Action cancelled.\n\nReply "menu" to see options.');
+    return makeResponse(customer, 'cancelled',
+      'Action cancelled.\n\nReply "menu" to return to the main menu.'
+    );
   }
 
   switch (text) {
@@ -635,7 +656,8 @@ async function handleTextCommand(parsed) {
 
       // Fallback
       return makeResponse(customer, 'fallback',
-        'I didn\'t understand "' + text + '".\n\nReply "menu" to see available options.'
+        'I apologise, I did not quite understand that.\n\n' +
+        'Please reply "menu" to see the available options.'
       );
   }
 }
