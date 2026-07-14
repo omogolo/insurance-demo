@@ -17,12 +17,11 @@ const customerSchema = new mongoose.Schema({
     required: true,
     unique: true,
     index: true,
-    // Accepts international format: +267XXXXXXXX or 267XXXXXXXX
     match: /^\+?267\d{8}$/
   },
   email: {
     type: String,
-    required: false,  // ← FIX: Not all WhatsApp users have email
+    required: false,
     lowercase: true,
     trim: true,
     match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -34,13 +33,13 @@ const customerSchema = new mongoose.Schema({
   address: {
     street: { type: String, required: true },
     city: { type: String, required: true },
-    state: { type: String, required: true },  // Botswana: district
+    state: { type: String, required: true },
     pincode: { type: String }
   },
   occupation: {
     type: String,
     trim: true
-  } 
+  },
   session: {
     action: {
       type: String,
@@ -55,9 +54,8 @@ const customerSchema = new mongoose.Schema({
       default: Date.now
     }
   }
-  
 }, {
-  timestamps: true  // ← FIX: adds createdAt/updatedAt
+  timestamps: true
 });
 
 module.exports = mongoose.model('Customer', customerSchema);
