@@ -41,6 +41,22 @@ const customerSchema = new mongoose.Schema({
     type: String,
     trim: true
   }
+    
+  session: {
+    action: {
+      type: String,
+      default: null
+    },
+    data: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }
+  
 }, {
   timestamps: true  // ← FIX: adds createdAt/updatedAt
 });
